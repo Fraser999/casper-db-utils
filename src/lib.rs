@@ -15,33 +15,33 @@ pub mod error {
     }
 }
 
-mod block {
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize, Hash)]
-    pub struct BlockHeader {
-        parent_hash: Vec<u8>,
-        state_root_hash: Vec<u8>,
-        pub body_hash: Vec<u8>,
-        random_bit: bool,
-        accumulated_seed: Vec<u8>,
-        era_end: Option<Vec<u8>>,
-        timestamp: u64,
-        era_id: u64,
-        height: u64,
-        protocol_version: [u32; 3],
-    }
-
-    impl BlockHeader {
-        pub fn body_hash(&self) -> String {
-            base16::encode_lower(&self.body_hash)
-        }
-
-        pub fn height(&self) -> u64 {
-            self.height
-        }
-    }
-}
+// mod block {
+//     use serde::{Deserialize, Serialize};
+//
+//     #[derive(Debug, Serialize, Deserialize, Hash)]
+//     pub struct BlockHeader {
+//         parent_hash: Vec<u8>,
+//         state_root_hash: Vec<u8>,
+//         pub body_hash: Vec<u8>,
+//         random_bit: bool,
+//         accumulated_seed: Vec<u8>,
+//         era_end: Option<Vec<u8>>,
+//         timestamp: u64,
+//         era_id: u64,
+//         height: u64,
+//         protocol_version: [u32; 3],
+//     }
+//
+//     impl BlockHeader {
+//         pub fn body_hash(&self) -> String {
+//             base16::encode_lower(&self.body_hash)
+//         }
+//
+//         pub fn height(&self) -> u64 {
+//             self.height
+//         }
+//     }
+// }
 
 pub mod db {
     use std::{collections::HashSet, path::PathBuf};
@@ -50,7 +50,9 @@ pub mod db {
         Cursor, Database, DatabaseFlags, Environment, EnvironmentFlags, Transaction, WriteFlags,
     };
 
-    use super::{block::BlockHeader, error::ToolError};
+    use casper_node::types::BlockHeader;
+
+    use super::error::ToolError;
 
     type Hashes = HashSet<Vec<u8>>;
 
@@ -91,8 +93,11 @@ pub mod db {
         let mut cursor = txn.open_rw_cursor(db)?;
 
         let mut header_hashes = HashSet::new();
-        let mut body_hashes = HashSet::new();
+        let mut body_hashes_for_removal = HashSet::new();
+        let mut body_hashes_to_be_retained = HashSet::new();
 
+        let mut retained_heights = std::collections::BTreeSet::new();
+        let mut removed_heights = std::collections::BTreeSet::new();
         for (raw_key, raw_val) in cursor.iter() {
             let block_header: BlockHeader =
                 bincode::deserialize(raw_val).expect("failed to deserialize block header");
@@ -100,16 +105,28 @@ pub mod db {
 
             if block_height > max_block_height {
                 header_hashes.insert(raw_key.to_vec());
-                body_hashes.insert(block_header.body_hash.clone());
+                body_hashes_for_removal.insert(block_header.body_hash().as_ref().to_owned());
 
                 cursor.del(WriteFlags::empty())?;
+                removed_heights.insert(block_height);
+            } else {
+                body_hashes_to_be_retained.insert(block_header.body_hash().as_ref().to_owned());
+                retained_heights.insert(block_height);
             }
         }
 
         drop(cursor);
         txn.commit().expect("failed to commit transaction");
 
-        Ok((header_hashes, body_hashes))
+        body_hashes_for_removal = body_hashes_for_removal
+            .difference(&body_hashes_to_be_retained)
+            .cloned()
+            .collect();
+
+        println!("retained total: {}", retained_heights.len());
+        println!("removed blocks at heights: {:?}", removed_heights);
+
+        Ok((header_hashes, body_hashes_for_removal))
     }
 
     fn delete_from_db(db: Database, env: &Environment, hashes: Hashes) -> Result<u64, ToolError> {
@@ -127,5 +144,3 @@ pub mod db {
         Ok(count)
     }
 }
-
-pub use block::BlockHeader;

@@ -1,9 +1,9 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use casper_db_utils::{db, error::ToolError};
 
 fn main() -> Result<(), ToolError> {
-    let matches = App::new("lmdb-util")
+    let matches = Command::new("lmdb-util")
         .arg(
             Arg::new("db-path")
                 .required(true)
